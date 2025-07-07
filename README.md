@@ -1,7 +1,7 @@
 # Boundless Prover 指南
 Boundless Prover 节点是一个参与 Boundless 去中心化证明市场的计算型证明系统。Prover 需要质押 USDC，竞标计算任务，使用 GPU 加速生成零知识证明，并在成功生成证明后获得奖励。
 
-本指南涵盖了 Ubuntu 20.04/22.04 系统下的**自动化**和**手动**安装方法。
+本指南涵盖了 Ubuntu 20.04/22.04 系统下的**自动化**安装方法。
 
 ## 目录
 - [Boundless Prover 市场](#boundless-prover-市场)
@@ -34,7 +34,7 @@ Boundless Prover 节点是一个参与 Boundless 去中心化证明市场的计�
 ## 注意事项
 - Prover 目前处于测试阶段，虽然我承认本指南已经非常完善，但你在运行过程中可能仍会遇到一些问题，因此你可以等到官方激励测试网更稳定、指南更新后再参与，或者现在就开始尝试。
 - 建议先从测试网开始，以免质押资金损失。
-- 我会不断更新本 github 指南，所以请随时回来查看，并关注我的 [X](https://x.com/0xMoei) 获取最新动态。
+- 我会不断更新本 github 指南，所以请随时回来查看。
 
 ---
 
@@ -97,9 +97,6 @@ cd ~/boundless
 ### 修改 x-exec-agent-common & gpu-prove-agent 的 CPU/RAM
 `prover.sh` 脚本管理所有 broker 配置（如 `broker.toml`），但如需优化并为 `compose.yml` 增加 RAM 和 CPU，请参考 [x-exec-agent-common](#修改-gpu_prove_agent-的-cpu/ram) 和 [gpu-prove-agent](#修改-gpu_prove_agent-的-cpu/ram) 部分
 * 修改 `compose.yml` 后需重启 broker
-
-### 注意
-即使你使用自动化脚本安装，仍建议阅读**[手动安装](#手动安装)**和**[Bento（Prover）与 Broker 优化](#bento-prover--broker-优化)**部分，学习如何优化 Prover。
 
 ---
 
