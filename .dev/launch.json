@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run main.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "env": {
+                "ENV_MODE": "development",
+                "API_KEY": "your_api_key_here"
+            },
+            "args": [
+                "--input", "data/input.json",
+                "--verbose"
+            ],
+            "justMyCode": true,
+            "python": "${workspaceFolder}/.venv/bin/python"
+        }
+    ]
+}

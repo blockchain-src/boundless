@@ -1,21 +1,21 @@
-# Step-by-Step Guide to Modify the Number of GPUs
-The provided [compose.yml](https://github.com/0xmoei/boundless/blob/main/compose.yml) file is configured to use 4 GPUs, each assigned to a `gpu_prove_agent` service (`gpu_prove_agent0` to `gpu_prove_agent3`).
+# 步骤指南：修改 GPU 数量
+所提供的 [compose.yml](https://github.com/0xmoei/boundless/blob/main/compose.yml) 文件默认配置为使用 4 块 GPU，每块 GPU 分配给一个 `gpu_prove_agent` 服务（`gpu_prove_agent0` 到 `gpu_prove_agent3`）。
 
-To adjust the number of GPUs—either by adding or removing them. You need to modify the `gpu_prove_agent` service definitions and update the `depends_on` list in the `broker` service.
+要调整 GPU 的数量（无论是增加还是减少），你需要修改 `gpu_prove_agent` 服务的定义，并更新 `broker` 服务中的 `depends_on` 列表。
 
-This guide outlines the specific parts of the file to change.
+本指南将详细说明需要更改的具体部分。
 
-## Identify the Target Number of GPUs
-* Decide how many GPUs you want to use (e.g., 3 instead of 4, or 5 instead of 4).
-* Confirm the GPU device IDs available on your host with `nvidia-smi -L`
+## 确定目标 GPU 数量
+* 决定你想要使用的 GPU 数量（例如，将 4 块改为 3 块，或将 4 块改为 5 块）。
+* 使用 `nvidia-smi -L` 命令确认主机上可用的 GPU 设备 ID。
 
-## Modify the compose.yml File
-* Open the `compose.yml` file in a text editor.
-* Locate the `gpu_prove_agentX` services (lines defining `gpu_prove_agent0` to `gpu_prove_agent3`) and the broker service’s `depends_on` list.
+## 修改 compose.yml 文件
+* 用文本编辑器打开 `compose.yml` 文件。
+* 找到 `gpu_prove_agentX` 服务（定义 `gpu_prove_agent0` 到 `gpu_prove_agent3` 的部分）以及 broker 服务的 `depends_on` 列表。
 
-## Option 1: To Add a GPU (If you have more than 4 GPUs)
-### 1- Duplicate a `gpu_prove_agent` service definition:
-* Copy an existing block, such as the one for `gpu_prove_agent3`:
+## 方案一：增加 GPU（如果你有超过 4 块 GPU）
+### 1- 复制一个 `gpu_prove_agent` 服务定义：
+* 复制现有的服务块，例如 `gpu_prove_agent3`：
 ```
   gpu_prove_agent3:
     <<: *agent-common
@@ -30,9 +30,9 @@ This guide outlines the specific parts of the file to change.
               device_ids: ['3']
               capabilities: [gpu]
 ```
-* Rename it to the next sequential number (e.g., `gpu_prove_agent4` for a fifth GPU).
-* Update the `device_ids` field to the new GPU ID (e.g., change `'3'` to `'4'`).
-* Example for `gpu_prove_agent4`:
+* 将其重命名为下一个顺序号（例如，第五块 GPU 命名为 `gpu_prove_agent4`）。
+* 更新 `device_ids` 字段为新的 GPU ID（例如，将 `'3'` 改为 `'4'`）。
+* `gpu_prove_agent4` 的示例：
 ```
   gpu_prove_agent4:
     <<: *agent-common
@@ -48,8 +48,8 @@ This guide outlines the specific parts of the file to change.
               capabilities: [gpu]
 ```
 
-### 2- Update the `x-broker-common` service’s `depends_on` list:
-Find the `x-broker-common` service:
+### 2- 更新 `x-broker-common` 服务的 `depends_on` 列表：
+找到 `x-broker-common` 服务：
 ```yaml
 x-broker-common: &broker-common
   restart: always
@@ -75,7 +75,7 @@ x-broker-common: &broker-common
   network_mode: host
 ```
 
-* Add the new service name (e.g., `gpu_prove_agent4`) to the depends_on list:
+* 在 `depends_on` 列表中添加新服务名（如 `gpu_prove_agent4`）：
 ```yaml
   depends_on:
     - rest_api
@@ -93,9 +93,9 @@ x-broker-common: &broker-common
 ```
 
 
-## Option 2: To Remove a GPU (If you have less than 4 GPUs)
-### 1- Delete a `gpu_prove_agent` service definition:
-* Remove the entire block for the service you no longer need (e.g., `gpu_prove_agent3`):
+## 方案二：减少 GPU（如果你有少于 4 块 GPU）
+### 1- 删除一个 `gpu_prove_agent` 服务定义：
+* 删除不再需要的服务块（如 `gpu_prove_agent3`）：
 ```yaml
   gpu_prove_agent3:
     <<: *agent-common
@@ -111,8 +111,8 @@ x-broker-common: &broker-common
               capabilities: [gpu]
 ```
 
-### 2- Update the broker service’s depends_on list:
-* Remove the corresponding service name (e.g., `gpu_prove_agent3`) from the `depends_on` list in the `x-broker-common` service:
+### 2- 更新 broker 服务的 `depends_on` 列表：
+* 在 `x-broker-common` 服务的 `depends_on` 列表中，删除对应的服务名（如 `gpu_prove_agent3`）：
 ```yaml
   depends_on:
     - rest_api

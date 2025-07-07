@@ -1,0 +1,564 @@
+name: Main workflow
+
+on:
+  pull_request:
+    branches:
+      - main
+      - 'release-*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: read
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  RISC0_TOOLCHAIN_VERSION: 1.85.0
+  RISC0_CRATE_VERSION: "2.1.0"
+  FOUNDRY_VERSION: v1.0.0
+
+jobs:
+  # see: https://github.com/orgs/community/discussions/26822
+  main-status-check:
+    if: always()
+    needs:
+      - rust
+      - link-check
+      - format
+      - foundry
+      - examples
+      - docker
+      - infra
+      - rust-pkg-check
+      - docs-rs
+      - deployment-address-check
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all job status
+        # see https://docs.github.com/en/actions/reference/context-and-expression-syntax-for-github-actions#needs-context
+        # see https://stackoverflow.com/a/67532120/4907315
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
+
+  rust:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.main == 'true' || needs.files-changed.outputs.docs == 'true'
+    services:
+      postgres:
+        image: postgres:latest
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_PASSWORD: password
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full history is required by license-check.py
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: install python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: setup sccache + s3
+        uses: ./.github/actions/sccache
+
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+      - name: install cargo risczero
+        uses: ./.github/actions/bininstall-risc0
+        with:
+          risczero-version: ${{ env.RISC0_CRATE_VERSION }}
+          toolchain-version: ${{ env.RISC0_TOOLCHAIN_VERSION }}
+      
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - name: Install cargo-sort
+        uses: risc0/cargo-install@b9307573043522ab0d3e3be64a51763b765b52a4
+        with:
+          crate: cargo-sort
+          version: "1.0"
+
+      - name: cargo Sort
+        run: cargo sort --workspace --check
+
+      - name: cargo format
+        run: cargo fmt --all -- --check
+
+      - name: license check
+        run: python license-check.py
+
+      - name: forge build
+        run: forge build
+
+      - name: cargo check
+        run: cargo check --locked --all-targets
+
+      - name: cargo doc
+        env:
+          RUSTFLAGS: "-Dwarnings"
+          RISC0_SKIP_BUILD: 1
+        run: cargo doc --locked
+
+      - name: cargo clippy
+        env:
+          RUSTFLAGS: "-Dwarnings"
+          RISC0_SKIP_BUILD: 1
+        run: cargo clippy --locked --all-targets
+
+        # build script for boundless-market copies Solidity build artifacts.
+        # check that these are not modified, which would indicate they need to be updated.
+      - name: check for changes to files in git index
+        run: git diff --exit-code -- crates/boundless-market/src/contracts/artifacts
+
+      - name: cargo test
+        run: cargo test --locked --workspace --all-targets -- --include-ignored
+        env:
+          DATABASE_URL: postgres://postgres:password@localhost:5432/postgres
+          RISC0_DEV_MODE: true
+
+      - name: sccache stats
+        run: sccache --show-stats
+  
+  rust-pkg-check:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.main == 'true'
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: setup sccache + s3
+        uses: ./.github/actions/sccache
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+      - name: install cargo risczero
+        uses: ./.github/actions/bininstall-risc0
+        with:
+          risczero-version: ${{ env.RISC0_CRATE_VERSION }}
+          toolchain-version: ${{ env.RISC0_TOOLCHAIN_VERSION }}
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - name: check order-stream
+        run: cargo check --locked -p order-stream --bin order_stream
+
+      - name: check broker
+        run: cargo check --locked -p broker --bin broker
+
+  link-check:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: restore lychee cache
+        id: restore-cache
+        uses: actions/cache@v4
+        with:
+          path: .lycheecache
+          key: cache-lychee-${{ github.sha }}
+          restore-keys: cache-lychee-
+
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+
+      - name: install cargo-binstall
+        uses: baptiste0928/cargo-install@904927dbe77864e0f2281519fe9d5bd097a220b3
+        with:
+          crate: cargo-binstall
+          version: '=1.10.8'
+          locked: true
+
+      - run: cargo binstall -y --force lychee@0.15.1
+
+      - name: run lychee
+        # lychee does not respect the .gitignore natively
+        # https://github.com/lycheeverse/lychee/issues/470#issuecomment-1094690229
+        # don't run on `documentation` folder, it has it's own checker for links
+        run: git ls-files '*.md' ':!:documentation/*' | xargs lychee --base . --cache --
+
+      - name: save lychee cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .lycheecache
+          key: ${{ steps.restore-cache.outputs.cache-primary-key }}
+
+  format:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+
+      - name: install cargo-binstall
+        uses: baptiste0928/cargo-install@904927dbe77864e0f2281519fe9d5bd097a220b3
+        with:
+          crate: cargo-binstall
+          version: '=1.10.8'
+          locked: true
+
+      - run: cargo binstall -y --force dprint@0.47.2
+
+      - run: dprint check
+
+  foundry:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.main == 'true'
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+
+      - name: forge fmt
+        run: forge fmt --check
+        working-directory: contracts
+
+      - name: forge test
+        run: forge test -vvv
+        working-directory: contracts
+
+  # Run as a separate job because we need to install a different set of tools.
+  # In particular, it uses nightly Rust and _does not_ install Forge or cargo risczero.
+  docs-rs:
+    # TODO: Revert this change when CC on self-hosted runners in fixed.
+    runs-on: ubuntu-latest
+    needs: files-changed
+    if: needs.files-changed.outputs.main == 'true'
+    steps:
+      # This is a workaround from: https://github.com/actions/checkout/issues/590#issuecomment-970586842
+      - run: "git checkout -f $(git -c user.name=x -c user.email=x@x commit-tree $(git hash-object -t tree /dev/null) < /dev/null) || :"
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+        with:
+          toolchain: ${{ env.RISC0_TOOLCHAIN_VERSION }}
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+        with:
+          # Building with docs.rs config requires the nightly toolchain.
+          toolchain: nightly-2025-01-03
+      - run: cargo +nightly-2025-01-03 doc -p boundless-market --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: "--cfg docsrs -D warnings"
+
+  # Check that cargo publish can package the boundless-market crate
+  check-publish:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.main == 'true'
+    steps:
+      # This is a workaround from: https://github.com/actions/checkout/issues/590#issuecomment-970586842
+      - run: "git checkout -f $(git -c user.name=x -c user.email=x@x commit-tree $(git hash-object -t tree /dev/null) < /dev/null) || :"
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+        with:
+          toolchain: ${{ env.RISC0_TOOLCHAIN_VERSION }}
+
+      # TODO: Add dry-run publish checks for other crates; difficulty is they all depend on boundless-market being published
+      - run: cargo publish -p boundless-market --dry-run
+
+  examples:
+    runs-on: [ self-hosted, Linux, X64, prod, cuda, g6.4xlarge ]
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace:
+          - examples/counter
+          - examples/smart-contract-requestor
+          - examples/counter-with-callback
+          - examples/composition
+    needs: files-changed
+    if: needs.files-changed.outputs.examples == 'true'
+    env:
+      NVCC_APPEND_FLAGS: -arch=sm_89
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_CI_USER }}
+          password: ${{ secrets.DOCKERHUB_CI_PAT }}
+
+      - name: setup sccache + s3
+        uses: ./.github/actions/sccache
+
+      - uses: risc0/risc0/.github/actions/cuda@352dea62857ba57331053cd0986a12c1a4708732
+      - uses: risc0/risc0/.github/actions/rustup@352dea62857ba57331053cd0986a12c1a4708732
+
+      - name: install cargo risczero
+        uses: ./.github/actions/bininstall-risc0
+        with:
+          risczero-version: ${{ env.RISC0_CRATE_VERSION }}
+          toolchain-version: ${{ env.RISC0_TOOLCHAIN_VERSION }}
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+      
+      - name: Install cargo-sort
+        uses: risc0/cargo-install@b9307573043522ab0d3e3be64a51763b765b52a4
+        with:
+          crate: cargo-sort
+          version: "1.0"
+
+      - name: cargo Sort
+        run: cargo sort --workspace --check
+        working-directory: ${{ matrix.workspace }}
+
+      - name: cargo format
+        run: cargo fmt --all -- --check
+        working-directory: ${{ matrix.workspace }}
+
+      - name: forge build
+        run: forge build
+        working-directory: contracts
+
+      - name: cargo build
+        run: cargo build --all-features --locked
+        working-directory: ${{ matrix.workspace }}
+
+      - name: cargo clippy
+        run: cargo clippy --locked --workspace
+        working-directory: ${{ matrix.workspace }}
+        env:
+          RISC0_SKIP_BUILD: 1
+
+      - name: forge fmt
+        run: forge fmt --check
+        working-directory: ${{ matrix.workspace }}/contracts
+
+      - name: forge test
+        run: forge test -vvv
+        working-directory: ${{ matrix.workspace }}/contracts
+
+      - name: RUST_LOG="debug" cargo test
+        run: cargo test --all-features --locked -- --nocapture
+        working-directory: ${{ matrix.workspace }}
+        env:
+          RUST_LOG: "info"
+          RISC0_INFO: 1
+
+      - name: sccache stats
+        run: sccache --show-stats
+  docker:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.docker == 'true'
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.event.pull_request.base.repo.full_name
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_CI_USER }}
+          password: ${{ secrets.DOCKERHUB_CI_PAT }}
+
+      - name: docker-compose lint
+        run: docker compose --profile broker --env-file ./.env.broker-template config
+
+      - name: Fetch CI AWS Creds
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: 'us-west-2'
+          role-to-assume: 'arn:aws:iam::083632199359:role/gha_oidc_risc0_cache_shared_access'
+          output-credentials: true
+
+      - name: create ci creds file
+        run: |
+          echo "[default]" > ./dockerfiles/ci-cache-creds.txt
+          echo "aws_access_key_id=${{ steps.aws-creds.outputs.aws-access-key-id }}" >> ./dockerfiles/ci-cache-creds.txt && \
+          echo "aws_secret_access_key=${{ steps.aws-creds.outputs.aws-secret-access-key }}" >> ./dockerfiles/ci-cache-creds.txt && \
+          echo "aws_session_token=${{ steps.aws-creds.outputs.aws-session-token }}" >> ./dockerfiles/ci-cache-creds.txt
+
+      - name: Setup docker builder
+        run: docker buildx create --driver docker-container --use
+
+      - name: docker compose build
+        run: docker compose --profile broker --env-file ./.env.broker-template -f compose.yml -f ./dockerfiles/compose.ci.yml build
+
+  infra:
+    runs-on: [ self-hosted, prod, "${{ matrix.os }}", "${{ matrix.device }}" ]
+    strategy:
+      # Run only on Linux with CPU.
+      matrix:
+        include:
+          - os: Linux
+            feature: default
+            device: cpu
+    needs: files-changed
+    if: needs.files-changed.outputs.infra == 'true'
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history
+
+      - name: Install Pulumi
+        uses: pulumi/setup-pulumi@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run build for changed packages
+        run: |
+          for file in $(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }} | grep "^infra/"); do
+            # Get the package directory (the directory containing package.json)
+            package_dir=$(dirname "$file")
+            if [ -f "$package_dir/package.json" ]; then
+              echo "Building package in $package_dir"
+              cd "$package_dir"
+              npm install
+              npm run build
+              cd -
+            fi
+          done
+
+  deployment-address-check:
+    runs-on: ubuntu-latest
+    needs: files-changed
+    if: needs.files-changed.outputs.deployments == 'true'
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: install python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Check deployment addresses consistency
+        run: python deployments-check.py
+
+  files-changed:
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.changes.outputs.docker }}
+      main:      ${{ steps.changes.outputs.main }}
+      examples:  ${{ steps.changes.outputs.examples }}
+      docs:      ${{ steps.changes.outputs.docs }}
+      infra:     ${{ steps.changes.outputs.infra }}
+      deployments: ${{ steps.changes.outputs.deployments }}
+
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3.0.0
+        id: changes
+        with:
+          filters: |
+            # Changes to the Docker files. Docker jobs are slow.
+            docker:
+              - 'dockerfiles/**'
+              - 'compose.yml'
+              - '.env.broker-template'
+            # Changes affect the main codebase (rust + contracts).
+            main:
+              - '*' # run is anything in the root changed.
+              - 'crates/**'
+              - 'contracts/**'
+            # Changes that could effect the examples.
+            examples:
+              - '*' # run is anything in the root changed.
+              - 'crates/**'
+              - 'contracts/**'
+              - 'examples/**'
+            docs:
+              - '*' # run is anything in the root changed.
+              - 'crates/**'
+              - 'contracts/**'
+              - 'documentation/**'
+            # Changes to infrastructure code
+            infra:
+              - 'infra/**'
+            # Changes to deployment configuration files
+            deployments:
+              - 'contracts/deployment.toml'
+              - 'crates/boundless-market/src/deployments.rs'
+
