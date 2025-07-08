@@ -4,10 +4,10 @@ Boundless Prover 节点是一个参与 Boundless 去中心化证明市场的计�
 本指南涵盖了 Ubuntu 20.04/22.04 系统下的**自动化**安装方法。
 
 ## 目录
+- [官方视频教程](https://youtu.be/MZqU-J-fW2M)
 - [Boundless Prover 市场](#boundless-prover-市场)
 - [注意事项](#注意事项)
 - [硬件与软件要求](#硬件与软件要求)
-- [租用 GPU](#租用-gpu)
 - [自动化安装](#自动化安装)
 - [Bento（Prover）与 Broker 优化](#bento-prover--broker-优化)
   - [分段大小（Prover）](#分段大小prover)
